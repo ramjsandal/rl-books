@@ -11,6 +11,7 @@ from torchvision import datasets
 from torchvision.transforms import ToTensor
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_extraction.text import TfidfVectorizer
+import matplotlib.pyplot as plt
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
@@ -111,6 +112,24 @@ avg_test_dataset = GoodreadsDataset(test_features,  test_average_ratings)
 avg_train_dataloader = DataLoader(avg_train_dataset, 32, True)
 avg_test_dataloader = DataLoader(avg_test_dataset, 32, False)
 
+class Shallow(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear_relu_stack = nn.Sequential(
+            nn.Linear(4 + 7000 + 500, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1)
+        )
+
+    def __str__(self):
+        return "shallow"
+
+    def forward(self, x):
+        logits = self.linear_relu_stack(x)
+        return logits
+
+
+
 class AllTogether(nn.Module):
     def __init__(self):
         super().__init__()
@@ -126,26 +145,70 @@ class AllTogether(nn.Module):
             nn.Linear(32, 1)
         )
 
+    def __str__(self):
+        return "alltogether"
+
     def forward(self, x):
         logits = self.linear_relu_stack(x)
         return logits
 
-device = "cpu"
-avg_model = AllTogether().to(device=device)
 
-loss_fn = nn.MSELoss()
-avg_optimizer = torch.optim.SGD(avg_model.parameters(), lr=1e-3)
+class Separated(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear_relu_stack = nn.Sequential(
+            nn.Linear(16 + 256 + 256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+        )
+
+        self.title = nn.Sequential(
+            nn.Linear(7000, 256),
+            nn.ReLU()
+        )
+
+        self.author = nn.Sequential(
+            nn.Linear(500, 256),
+            nn.ReLU()
+        )
+
+        self.numerical = nn.Sequential(
+            nn.Linear(4, 16)
+        )
+
+    def __str__(self):
+        return "separated"
+
+
+    def forward(self, x):
+        numeric_features = x[:, :4]
+        title = x[:, 4:7004]
+        author = x[:, 7004:7504]
+
+        numeric_out = self.numerical(numeric_features)
+        title_out = self.title(title)
+        author_out = self.author(author)
+
+        logits = self.linear_relu_stack(torch.cat((numeric_out, title_out, author_out), dim=1))
+        return logits
 
 
 def train(dataloader, model, loss_fn, optimizer):
+    total_loss = 0
     size = len(dataloader.dataset)
     model.train()
     for batch, (X, y) in enumerate(dataloader):
         X, y = X.to(device), y.to(device)
+        batch_size = X.size(0)
 
         # Compute prediction error
         pred = model(X)
         loss = loss_fn(pred, y)
+        total_loss += loss.item() * batch_size
 
         # Backpropagation
         optimizer.zero_grad()
@@ -155,12 +218,12 @@ def train(dataloader, model, loss_fn, optimizer):
         if batch % 100 == 0:
             loss, current = loss.item(), (batch + 1) * len(X)
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+    return total_loss
 
 def test(dataloader, model, loss_fn):
     test_loss = 0
     num_samples = 0
     model.eval()
-    test_loss = 0
     with torch.no_grad():
         for X, y in dataloader:
             X, y = X.to(device), y.to(device)
@@ -169,10 +232,58 @@ def test(dataloader, model, loss_fn):
             test_loss += loss_fn(pred,y).item() * batch_size
             num_samples += batch_size
     print(test_loss/num_samples)
+    return test_loss/num_samples
+
+def graph_losses(losses, filename):
+    # losses is going to be an array where each index represents
+    # an epoch and the value is the loss at that epocj
+    xaxis = list(range(len(losses)))
+    plt.plot(xaxis, losses)
+    plt.xlabel("Epoch")
+    plt.ylabel("Total Loss")
+    plt.title("Total Loss at Each Training Epoch")
+    plt.savefig(filename)
+
+def graph_mse(losses):
+    # losses is going to be an array where each index represents
+    # an epoch and the value is the loss at that epocj
+    xaxis = list(range(len(losses)))
+    plt.plot(xaxis, losses)
+    plt.xlabel("Epoch")
+    plt.ylabel("Average MSE for Test")
+    plt.title("Average test performance at each epoch")
+    plt.show()
+
+
+
+device = "cpu"
+models = [Shallow().to(device=device), AllTogether().to(device=device), Separated().to(device=device)]
+optimizers = [torch.optim.SGD(models[0].parameters(), lr=5e-3), torch.optim.SGD(models[1].parameters(), lr=5e-3), torch.optim.SGD(models[2].parameters(), lr=5e-3)]
+avg_model = Shallow().to(device=device)
+loss_fn = nn.MSELoss()
+avg_optimizer = torch.optim.SGD(avg_model.parameters(), lr=5e-3)
 
 epochs = 50
-for t in range(epochs):
-    print(f"Epoch {t+1}\n-------------------------------")
-    train(avg_train_dataloader, avg_model, loss_fn, avg_optimizer)
-    test(avg_test_dataloader, avg_model, loss_fn)
-print("Done!")
+losses = []
+avg_mse = []
+final_losses = []
+test_scores = []
+last_loss = 10000000
+for i, model in enumerate(models):
+    for t in range(epochs):
+        print(f"Epoch {t+1}\n-------------------------------")
+        current_loss = train(avg_train_dataloader, model, loss_fn, optimizers[i])
+        if (current_loss > last_loss):
+            break
+        losses.append(current_loss)
+        print(current_loss)
+
+    torch.save(avg_model.state_dict(), "model.pth")
+    print(losses)
+    final_losses.append(losses[len(losses) - 1])
+    test_scores.append(test(avg_test_dataloader, model, loss_fn))
+    graph_losses(losses, str(model))
+
+for i in range(len(final_losses)):
+    print("Model " + str(i) + " final total loss: " + str(final_losses[i]))
+    print("Model " + str(i) + " test score: " + str(test_scores[i]))
