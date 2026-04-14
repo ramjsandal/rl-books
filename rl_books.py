@@ -121,12 +121,13 @@ class Shallow(nn.Module):
             nn.Linear(256, 1)
         )
 
-    def __str__(self):
-        return "shallow"
-
     def forward(self, x):
         logits = self.linear_relu_stack(x)
         return logits
+
+    def __str__(self):
+        return "shallow"
+
 
 
 
@@ -145,12 +146,12 @@ class AllTogether(nn.Module):
             nn.Linear(32, 1)
         )
 
-    def __str__(self):
-        return "alltogether"
-
     def forward(self, x):
         logits = self.linear_relu_stack(x)
         return logits
+
+    def __str__(self):
+        return "alltogether"
 
 
 class Separated(nn.Module):
@@ -180,10 +181,6 @@ class Separated(nn.Module):
             nn.Linear(4, 16)
         )
 
-    def __str__(self):
-        return "separated"
-
-
     def forward(self, x):
         numeric_features = x[:, :4]
         title = x[:, 4:7004]
@@ -195,6 +192,12 @@ class Separated(nn.Module):
 
         logits = self.linear_relu_stack(torch.cat((numeric_out, title_out, author_out), dim=1))
         return logits
+
+
+    def __str__(self):
+        return "separated"
+
+
 
 
 def train(dataloader, model, loss_fn, optimizer):
